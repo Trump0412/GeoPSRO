@@ -1,0 +1,8 @@
+reward_variants:
+  - answer_only
+  - answer_plus_output_format
+  - answer_plus_psro_format
+  - answer_plus_process
+  - full_psro_rft
+runtime:
+  output: results/ablations/reward_ablation.csv

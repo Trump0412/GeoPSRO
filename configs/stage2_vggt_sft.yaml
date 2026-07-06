@@ -1,0 +1,32 @@
+model:
+  base_model: /mnt/guojh/lq/new/weights/base_models/Qwen3-VL-4B-Instruct
+  init_checkpoint: outputs/stage1_vggt_align/geo_adapter.pt
+  num_geo_tokens: 64
+  use_lora: true
+  lora_rank: 64
+  lora_alpha: 128
+train:
+  epochs: 1
+  lr_lora: 1.0e-5
+  lr_projector: 5.0e-5
+  lr_geo_adapter: 5.0e-5
+  warmup_ratio: 0.03
+  scheduler: cosine
+  global_batch_size: 64
+  max_seq_len: 4096
+  num_frames: 8
+  bf16: true
+  geometry_on_ratio: 0.7
+  geometry_drop_ratio: 0.3
+data:
+  datasets:
+    - name: spar
+      jsonl: data/spar/train.jsonl
+      weight: 0.7
+      vggt_cache_root: cache/vggt/spar
+    - name: llava_hound
+      jsonl: data/llava_hound/train.jsonl
+      weight: 0.3
+      vggt_cache_root: cache/vggt/llava_hound
+runtime:
+  output_dir: outputs/stage2_vggt_sft

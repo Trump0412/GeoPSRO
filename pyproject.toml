@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geopsro4d"
+version = "0.1.0"
+description = "GeoPSRO-4D: VGGT-augmented PSRO-RFT pipeline for 4D spatial reasoning"
+requires-python = ">=3.10"
+dependencies = [
+  "torch",
+  "pillow",
+  "safetensors",
+  "pyyaml",
+]
+
+[tool.setuptools.packages.find]
+include = ["geopsro4d*"]

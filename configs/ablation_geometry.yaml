@@ -1,0 +1,10 @@
+modes:
+  - normal
+  - zero
+  - shuffle
+  - depth_only
+  - depth_camera
+  - full
+runtime:
+  predictions: results/eval/dsr_predictions.jsonl
+  output: results/ablations/geometry_ablation.csv

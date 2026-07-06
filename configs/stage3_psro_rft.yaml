@@ -1,0 +1,25 @@
+model:
+  init_checkpoint: outputs/stage2_vggt_sft
+  reference_model: outputs/stage2_vggt_sft
+rft:
+  algorithm: gspo
+  group_size: 8
+  temperature: 0.7
+  top_p: 0.9
+  max_new_tokens: 512
+  kl_coef: 0.02
+  reward_normalization: group
+  reward_fn: geopsro4d.reward.reward_fn.compute_reward
+data:
+  datasets:
+    - name: 4dthinker_4drl
+      jsonl: data/4dthinker/train.jsonl
+      weight: 0.7
+      vggt_cache_root: cache/vggt/4dthinker
+    - name: spatialladder_multi_image
+      jsonl: data/spatialladder/train.jsonl
+      weight: 0.3
+      vggt_cache_root: cache/vggt/spatialladder
+runtime:
+  output_dir: outputs/stage3_psro_rft
+  verl_root: /mnt/guojh/lq/new/verl

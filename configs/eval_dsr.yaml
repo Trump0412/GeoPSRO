@@ -1,0 +1,8 @@
+data:
+  dsr_jsonl: data/dsr/test.jsonl
+  predictions: results/eval/dsr_predictions.jsonl
+eval:
+  prompt_mode: psro
+  geometry_mode: normal
+runtime:
+  output_dir: results/eval/dsr
