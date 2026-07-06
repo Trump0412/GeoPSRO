@@ -61,7 +61,7 @@ class QwenVGGTWrapper(nn.Module):
         self.llm_dim = llm_dim
 
     def geometry_inputs_embeds(self, cache_data: dict[str, Any], *, mode: str = GEOMETRY_NORMAL) -> torch.Tensor:
-        if mode == GEOMETRY_NORMAL:
+        if mode in {GEOMETRY_NORMAL, GEOMETRY_SHUFFLE}:
             mode = GEOMETRY_FULL
         if mode not in GEOMETRY_MODES:
             raise ValueError(f"Unknown geometry mode: {mode}")
