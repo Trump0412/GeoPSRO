@@ -18,11 +18,18 @@ Stage 3: PSRO-RFT
 The PSRO format is introduced only in RFT:
 
 ```text
-Observation:
-Transition:
-Derivation:
-Answer:
+<think>
+Spatial Observation:
+Spatial Transition:
+Answer Derivation:
+</think>
+<answer>
+final answer only
+</answer>
 ```
+
+See `GeoPSRO_METHOD_TRAINING_DETAILS.md` for the method, prompt, loss, data,
+reward, and batch-size plan.
 
 ## Quick Smoke
 

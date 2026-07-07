@@ -19,6 +19,8 @@ Last updated: 2026-07-07
 - DSR-style scorer plus geometry/reward ablation output scaffolds.
 - Restored GeoBridge-compatible Stage 3 reward as the main reward:
   `R_answer + 0.5 * R_format + 0.05 * R_words`, with the original spatial vocabulary scoring and answer-gated word reward.
+- Added `GeoPSRO_METHOD_TRAINING_DETAILS.md` as the canonical method/training
+  record for prompt format, losses, data mixtures, batch plans, and go/no-go checks.
 - Run scripts and YAML configs for VGGT cache, Stage 1, Stage 2, Stage 3, DSR eval, and ablations.
 
 ## Validation
