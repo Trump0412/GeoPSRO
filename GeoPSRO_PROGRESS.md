@@ -40,15 +40,47 @@ python -m geopsro4d.eval.eval_dsr --predictions outputs/eval_smoke_predictions.j
 python -m geopsro4d.eval.eval_geometry_ablation --predictions outputs/eval_smoke_predictions.jsonl --output outputs/geometry_ablation_smoke.csv
 ```
 
+## 2026-07-07 Stage 2 Formal Queue
+
+- Stage 1 status: only `outputs/stage1_qwen2b_smoke_50/geo_adapter.pt` has
+  completed for Qwen3-VL-2B. A long formal Stage 1 checkpoint was not found.
+- Stage 2 datasets selected for the formal run:
+  SPAR-234K (`234056` samples) plus LLaVA-Hound (`63750` samples).
+- Full compact VGGT cache is required before the formal SFT run. The previous
+  pilot cache only covered `1024 + 1024` samples.
+- Node `10.99.8.18` / `node218` has 8 free A100 80GB GPUs and can access the
+  shared `/mnt/guojh/lq/new` mount.
+- Full Stage 2 cache queue is running on node218:
+  6 shards for SPAR on GPUs 0-5 and 2 shards for LLaVA-Hound on GPUs 6-7.
+- Stage 2 SFT now supports `torchrun` DDP. A 2-GPU DDP smoke passed with
+  `world_size=2` and `skipped=0`.
+- A watcher tmux session `geopsro_stage2_wait_and_train` is queued on node218.
+  It waits for the full cache to finish, checks cache count thresholds, and then
+  starts Stage 2 SFT with:
+
+```text
+NPROC_PER_NODE=8
+BATCH_SIZE=16
+global_batch_size=128
+MODEL_DTYPE=bfloat16
+SPAR_CACHE_ROOT=cache/vggt/spar
+LLAVA_CACHE_ROOT=cache/vggt/llava_hound
+MAX_CACHED_SAMPLES_PER_DATASET=300000
+```
+
+The watcher logs to `logs/stage2_wait_and_train.log`. Formal Stage 2 output will
+use the pattern `outputs/stage2_sft_spar234k_llavahound64k_b16x8_*`.
+
 ## Server Defaults
 
 The scripts default to:
 
 ```text
-Qwen3-VL-4B: /mnt/guojh/lq/new/weights/base_models/Qwen3-VL-4B-Instruct
+Qwen3-VL-2B: /mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct
 VGGT-1B: /mnt/guojh/lq/new/weights/base_models/VGGT-1B
 VGGT source: /mnt/guojh/lq/new/GeoWire/third_party/vggt
-Conda env: /mnt/guojh/lq/new/conda/envs/geothinker
+Qwen/Stage 2 env: /mnt/guojh/lq/new/conda/envs/geobridge-verl
+VGGT cache env: /mnt/guojh/lq/new/conda/envs/geothinker
 VERL root: /mnt/guojh/lq/new/verl
 ```
 
