@@ -145,7 +145,7 @@ def run_qwen_smoke(
         stage1_metrics = load_adapter(stage1_checkpoint, wrapper)
     if dist_ctx["distributed"]:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[dist_ctx["local_rank"]], find_unused_parameters=False)
-        wrapper = torch.nn.parallel.DistributedDataParallel(wrapper, device_ids=[dist_ctx["local_rank"]], find_unused_parameters=False)
+        wrapper = torch.nn.parallel.DistributedDataParallel(wrapper, device_ids=[dist_ctx["local_rank"]], find_unused_parameters=True)
     params = [
         {"params": [p for p in model.parameters() if p.requires_grad], "lr": lr_lora},
         {"params": [p for p in _unwrap_model(wrapper).trainable_geo_parameters()], "lr": lr_geo},
