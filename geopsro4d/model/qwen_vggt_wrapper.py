@@ -57,6 +57,8 @@ class QwenVGGTWrapper(nn.Module):
         self.geo_resampler = GeoResampler(input_dim=raw_geo_dim, model_dim=adapter_dim, num_geo_tokens=num_geo_tokens)
         self.geo_projector = GeoProjector(model_dim=adapter_dim, llm_dim=llm_dim)
         self.geometry_gate = GeometryGate(init_value=0.2)
+        self.null_geo_embeds = nn.Parameter(torch.empty(1, num_geo_tokens, llm_dim))
+        nn.init.normal_(self.null_geo_embeds, mean=0.0, std=1e-4)
         self.num_geo_tokens = num_geo_tokens
         self.llm_dim = llm_dim
 
@@ -67,7 +69,7 @@ class QwenVGGTWrapper(nn.Module):
             raise ValueError(f"Unknown geometry mode: {mode}")
         device = next(self.geo_projector.parameters()).device
         if mode in {GEOMETRY_ZERO, GEOMETRY_DROP}:
-            return torch.zeros(1, self.num_geo_tokens, self.llm_dim, device=device)
+            return self.geometry_gate(self.null_geo_embeds.to(device))
         features, mask = self.geo_tokenizer(cache_data, mode=mode)
         features = features.to(device)
         mask = mask.to(device)
@@ -103,6 +105,7 @@ class QwenVGGTWrapper(nn.Module):
         modules = [self.geo_tokenizer, self.geo_resampler, self.geo_projector, self.geometry_gate]
         for module in modules:
             yield from module.parameters()
+        yield self.null_geo_embeds
 
 
 class TinyQAModel(nn.Module):

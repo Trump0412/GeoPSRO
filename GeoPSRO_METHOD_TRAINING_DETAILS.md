@@ -225,6 +225,9 @@ geometry_drop_ratio: 0.3
 ```
 
 This prevents the model from becoming brittle when geometry is noisy or missing.
+The drop/zero branch uses a small learned null geometry prefix rather than
+literal all-zero embeddings. It does not read VGGT cache or carry sample geometry,
+but it avoids unstable Qwen3-VL LoRA gradients observed with all-zero prefixes.
 
 Default config:
 
@@ -429,7 +432,7 @@ normal:
   full geometry tokens
 
 zero:
-  geometry tokens are zeroed
+  learned null geometry prefix, no sample-specific VGGT geometry
 
 shuffle:
   geometry tokens are loaded from another sample

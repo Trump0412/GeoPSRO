@@ -33,6 +33,7 @@ def save_adapter(output: str | Path, wrapper: QwenVGGTWrapper, metrics: dict[str
             "geo_resampler": wrapper.geo_resampler.state_dict(),
             "geo_projector": wrapper.geo_projector.state_dict(),
             "geometry_gate": wrapper.geometry_gate.state_dict(),
+            "null_geo_embeds": wrapper.null_geo_embeds.detach().cpu(),
             "metrics": metrics,
         },
         output / "geo_adapter.pt",
