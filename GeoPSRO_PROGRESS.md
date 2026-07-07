@@ -54,9 +54,22 @@ python -m geopsro4d.eval.eval_geometry_ablation --predictions outputs/eval_smoke
   6 shards for SPAR on GPUs 0-5 and 2 shards for LLaVA-Hound on GPUs 6-7.
 - Stage 2 SFT now supports `torchrun` DDP. A 2-GPU DDP smoke passed with
   `world_size=2` and `skipped=0`.
-- A watcher tmux session `geopsro_stage2_wait_and_train` is queued on node218.
-  It waits for the full cache to finish, checks cache count thresholds, and then
-  starts Stage 2 SFT with:
+- A watcher tmux session `geopsro_stage1_stage2_wait_and_train` is queued on
+  node218. It waits for the full cache to finish, checks cache count thresholds,
+  runs formal Stage 1 first, and then starts formal Stage 2 SFT.
+
+Stage 1 formal launch plan:
+
+```text
+NPROC_PER_NODE=8
+BATCH_SIZE=32
+global_batch_size=256
+MODEL_DTYPE=bfloat16
+CACHE_ROOT=cache/vggt/spar
+MAX_CACHED_SAMPLES=300000
+```
+
+Stage 2 formal launch plan:
 
 ```text
 NPROC_PER_NODE=8
@@ -68,8 +81,9 @@ LLAVA_CACHE_ROOT=cache/vggt/llava_hound
 MAX_CACHED_SAMPLES_PER_DATASET=300000
 ```
 
-The watcher logs to `logs/stage2_wait_and_train.log`. Formal Stage 2 output will
-use the pattern `outputs/stage2_sft_spar234k_llavahound64k_b16x8_*`.
+The watcher logs to `logs/stage1_stage2_wait_and_train.log`. Formal output
+patterns are `outputs/stage1_vggt_align_spar234k_b32x8_*` and
+`outputs/stage2_sft_spar234k_llavahound64k_b16x8_*`.
 
 ## Server Defaults
 
