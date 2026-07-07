@@ -55,6 +55,7 @@ def run_qwen_smoke(
     lr_geo: float,
     max_text_tokens: int,
     max_grad_norm: float,
+    model_dtype: str,
 ) -> dict[str, float | int | str]:
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -63,9 +64,12 @@ def run_qwen_smoke(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     processor = AutoProcessor.from_pretrained(str(model_path), trust_remote_code=True)
     tokenizer = processor.tokenizer
+    dtype = torch.float32
+    if model_dtype == "bfloat16" and device.type == "cuda":
+        dtype = torch.bfloat16
     model = AutoModelForImageTextToText.from_pretrained(
         str(model_path),
-        dtype=torch.bfloat16 if device.type == "cuda" else torch.float32,
+        dtype=dtype,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
     )
@@ -230,6 +234,7 @@ def main() -> None:
     parser.add_argument("--lr-geo", type=float, default=1e-5)
     parser.add_argument("--max-text-tokens", type=int, default=1024)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--model-dtype", choices=["float32", "bfloat16"], default="float32")
     args = parser.parse_args()
     if args.smoke:
         print(run_smoke(args.output, args.steps, args.geometry_on_ratio))
@@ -256,6 +261,7 @@ def main() -> None:
                 lr_geo=args.lr_geo,
                 max_text_tokens=args.max_text_tokens,
                 max_grad_norm=args.max_grad_norm,
+                model_dtype=args.model_dtype,
             )
         )
         return
