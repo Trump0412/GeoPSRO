@@ -2,7 +2,9 @@
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-/mnt/guojh/lq/new/conda/envs/geobridge-verl/bin/python}"
+TORCHRUN_BIN="${TORCHRUN_BIN:-$(dirname "${PYTHON_BIN}")/torchrun}"
 OUTPUT="${OUTPUT:-outputs/stage2_vggt_sft}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
 
 export PYTHONPATH="${PYTHONPATH:-$PWD}"
 
@@ -32,4 +34,8 @@ if [[ -n "${MAX_TEXT_TOKENS:-}" ]]; then
   args+=(--max-text-tokens "${MAX_TEXT_TOKENS}")
 fi
 
-"${PYTHON_BIN}" -m geopsro4d.train.train_stage2_sft "${args[@]}"
+if [[ "${NPROC_PER_NODE}" -gt 1 ]]; then
+  "${TORCHRUN_BIN}" --standalone --nproc_per_node "${NPROC_PER_NODE}" -m geopsro4d.train.train_stage2_sft "${args[@]}"
+else
+  "${PYTHON_BIN}" -m geopsro4d.train.train_stage2_sft "${args[@]}"
+fi

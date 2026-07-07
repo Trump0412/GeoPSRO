@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import random
 from collections import Counter
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 
 from geopsro4d.data.schema import normalize_sample
 from geopsro4d.geometry.vggt_cache import VGGTCache
@@ -42,6 +44,38 @@ def run_smoke(output: Path, steps: int, geometry_on_ratio: float) -> dict[str, f
     return final
 
 
+def _setup_distributed() -> dict[str, int | bool | torch.device]:
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    distributed = world_size > 1
+    if torch.cuda.is_available():
+        if distributed:
+            torch.cuda.set_device(local_rank)
+            device = torch.device("cuda", local_rank)
+        else:
+            device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    if distributed and not dist.is_initialized():
+        dist.init_process_group(backend="nccl" if device.type == "cuda" else "gloo")
+    return {"distributed": distributed, "world_size": world_size, "rank": rank, "local_rank": local_rank, "device": device}
+
+
+def _unwrap_model(model):
+    return model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+
+
+def _barrier(dist_ctx: dict[str, int | bool | torch.device]) -> None:
+    if dist_ctx["distributed"] and dist.is_initialized():
+        dist.barrier()
+
+
+def _cleanup_distributed(dist_ctx: dict[str, int | bool | torch.device]) -> None:
+    if dist_ctx["distributed"] and dist.is_initialized():
+        dist.destroy_process_group()
+
+
 def run_qwen_smoke(
     *,
     output: Path,
@@ -67,8 +101,10 @@ def run_qwen_smoke(
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
-    seed_everything(3418)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dist_ctx = _setup_distributed()
+    seed_everything(3418 + dist_ctx["rank"])
+    device = dist_ctx["device"]
+    is_main = dist_ctx["rank"] == 0
     processor = AutoProcessor.from_pretrained(str(model_path), trust_remote_code=True)
     tokenizer = processor.tokenizer
     dtype = torch.float32
@@ -107,9 +143,12 @@ def run_qwen_smoke(
     stage1_metrics = {}
     if stage1_checkpoint:
         stage1_metrics = load_adapter(stage1_checkpoint, wrapper)
+    if dist_ctx["distributed"]:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[dist_ctx["local_rank"]], find_unused_parameters=False)
+        wrapper = torch.nn.parallel.DistributedDataParallel(wrapper, device_ids=[dist_ctx["local_rank"]], find_unused_parameters=False)
     params = [
         {"params": [p for p in model.parameters() if p.requires_grad], "lr": lr_lora},
-        {"params": list(wrapper.trainable_geo_parameters()), "lr": lr_geo},
+        {"params": [p for p in _unwrap_model(wrapper).trainable_geo_parameters()], "lr": lr_geo},
     ]
     trainable_params = [p for group in params for p in group["params"]]
     opt = torch.optim.AdamW(params)
@@ -123,11 +162,15 @@ def run_qwen_smoke(
     if not usable:
         raise SystemExit("No cached samples found for Stage 2 Qwen smoke")
     random.shuffle(usable)
+    if dist_ctx["distributed"]:
+        usable = usable[dist_ctx["rank"] :: dist_ctx["world_size"]]
+        if not usable:
+            raise SystemExit(f"No cached samples assigned to rank {dist_ctx['rank']}")
     usable_iter = itertools.cycle(usable)
     cache_handles: dict[Path, VGGTCache] = {}
 
     output = ensure_dir(output)
-    metrics_path = output / "metrics.jsonl"
+    metrics_path = output / ("metrics.jsonl" if is_main else f"metrics_rank{dist_ctx['rank']}.jsonl")
     rows = []
     geometry_on = 0
     total_examples = 0
@@ -149,11 +192,11 @@ def run_qwen_smoke(
             inputs_embeds, attention_mask, labels = _pad_training_examples(batch, device)
             out = model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
             opt.zero_grad(set_to_none=True)
-            row = _make_step_row(step + 1, batch, wrapper, out.loss, inputs_embeds)
+            row = _make_step_row(step + 1, batch, _unwrap_model(wrapper), out.loss, inputs_embeds)
             if not torch.isfinite(out.loss.detach()):
                 row.update({"loss": float("nan"), "skipped": 1, "skip_reason": "nonfinite_loss"})
                 rows.append(row)
-                _write_metric(metrics_file, row, step + 1, log_every)
+                _write_metric(metrics_file, row, step + 1, log_every if is_main else 0)
                 continue
             out.loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
@@ -168,28 +211,36 @@ def run_qwen_smoke(
                     }
                 )
                 rows.append(row)
-                _write_metric(metrics_file, row, step + 1, log_every)
+                _write_metric(metrics_file, row, step + 1, log_every if is_main else 0)
                 continue
             opt.step()
             row.update({"loss": float(out.loss.detach().float().cpu()), "grad_norm": float(grad_norm.detach().float().cpu()), "skipped": 0})
             rows.append(row)
-            _write_metric(metrics_file, row, step + 1, log_every)
+            _write_metric(metrics_file, row, step + 1, log_every if is_main else 0)
             if save_every > 0 and (step + 1) % save_every == 0:
-                checkpoint_dir = output / f"checkpoint_step_{step + 1}"
-                save_adapter(checkpoint_dir, wrapper, row)
-                model.save_pretrained(checkpoint_dir / "lora_adapter")
+                if is_main:
+                    checkpoint_dir = output / f"checkpoint_step_{step + 1}"
+                    save_adapter(checkpoint_dir, _unwrap_model(wrapper), row)
+                    _unwrap_model(model).save_pretrained(checkpoint_dir / "lora_adapter")
+                _barrier(dist_ctx)
 
     final = {
         **rows[-1],
         "geometry_on_ratio_observed": geometry_on / max(1, total_examples),
         "usable_cached_samples": len(usable),
+        "world_size": dist_ctx["world_size"],
+        "global_batch_size": batch_size * dist_ctx["world_size"],
+        "rank": dist_ctx["rank"],
         "model_path": str(model_path),
         "stage1_checkpoint": str(stage1_checkpoint) if stage1_checkpoint else "",
         "stage1_loss": stage1_metrics.get("loss", ""),
         "batch_size": batch_size,
     }
-    save_adapter(output, wrapper, final)
-    model.save_pretrained(output / "lora_adapter")
+    if is_main:
+        save_adapter(output, _unwrap_model(wrapper), final)
+        _unwrap_model(model).save_pretrained(output / "lora_adapter")
+    _barrier(dist_ctx)
+    _cleanup_distributed(dist_ctx)
     return final
 
 
@@ -198,8 +249,12 @@ def _make_training_example(model, tokenizer, wrapper, sample, cache_data, mode: 
     prompt_ids = prompt_ids.to(device)
     answer_ids = answer_ids.to(device)
     input_ids = torch.cat([prompt_ids, answer_ids], dim=1)
-    text_embeds = model.get_input_embeddings()(input_ids)
-    geo = wrapper.geometry_inputs_embeds(cache_data, mode=mode).to(device=device, dtype=text_embeds.dtype)
+    text_embeds = _unwrap_model(model).get_input_embeddings()(input_ids)
+    if isinstance(wrapper, torch.nn.parallel.DistributedDataParallel):
+        geo = wrapper(cache_data, mode=mode)
+    else:
+        geo = wrapper.geometry_inputs_embeds(cache_data, mode=mode)
+    geo = geo.to(device=device, dtype=text_embeds.dtype)
     seq_embeds = torch.cat([geo, text_embeds], dim=1).squeeze(0)
     seq_labels = torch.full((seq_embeds.shape[0],), -100, dtype=torch.long, device=device)
     seq_labels[geo.shape[1] + prompt_ids.shape[1] :] = answer_ids.squeeze(0)
@@ -321,38 +376,7 @@ def main() -> None:
         llava_cache = args.llava_cache_root or (args.cache_root / "llava_hound" if args.cache_root else None)
         if spar_cache is None or llava_cache is None:
             raise SystemExit("Stage 2 Qwen smoke requires --spar-cache-root and --llava-cache-root")
-        print(
-            run_qwen_smoke(
-                output=args.output,
-                model_path=args.model_path,
-                spar_jsonl=args.spar_jsonl,
-                llava_jsonl=args.llava_jsonl,
-                spar_cache_root=spar_cache,
-                llava_cache_root=llava_cache,
-                steps=args.steps,
-                geometry_on_ratio=args.geometry_on_ratio,
-                num_geo_tokens=args.num_geo_tokens,
-                stage1_checkpoint=args.stage1_checkpoint,
-                lr_lora=args.lr_lora,
-                lr_geo=args.lr_geo,
-                max_text_tokens=args.max_text_tokens,
-                max_grad_norm=args.max_grad_norm,
-                model_dtype=args.model_dtype,
-                batch_size=args.batch_size,
-                max_cached_samples_per_dataset=args.max_cached_samples_per_dataset,
-                log_every=args.log_every,
-                save_every=args.save_every,
-            )
-        )
-        return
-    if not args.stage1_checkpoint or not args.spar_jsonl or not args.llava_jsonl:
-        raise SystemExit("Stage 2 real run requires --stage1-checkpoint, --spar-jsonl and --llava-jsonl")
-    spar_cache = args.spar_cache_root or (args.cache_root / "spar" if args.cache_root else None)
-    llava_cache = args.llava_cache_root or (args.cache_root / "llava_hound" if args.cache_root else None)
-    if spar_cache is None or llava_cache is None:
-        raise SystemExit("Stage 2 real run requires --cache-root or both --spar-cache-root and --llava-cache-root")
-    print(
-        run_qwen_smoke(
+        result = run_qwen_smoke(
             output=args.output,
             model_path=args.model_path,
             spar_jsonl=args.spar_jsonl,
@@ -373,7 +397,38 @@ def main() -> None:
             log_every=args.log_every,
             save_every=args.save_every,
         )
+        if int(os.environ.get("RANK", "0")) == 0:
+            print(result)
+        return
+    if not args.stage1_checkpoint or not args.spar_jsonl or not args.llava_jsonl:
+        raise SystemExit("Stage 2 real run requires --stage1-checkpoint, --spar-jsonl and --llava-jsonl")
+    spar_cache = args.spar_cache_root or (args.cache_root / "spar" if args.cache_root else None)
+    llava_cache = args.llava_cache_root or (args.cache_root / "llava_hound" if args.cache_root else None)
+    if spar_cache is None or llava_cache is None:
+        raise SystemExit("Stage 2 real run requires --cache-root or both --spar-cache-root and --llava-cache-root")
+    result = run_qwen_smoke(
+        output=args.output,
+        model_path=args.model_path,
+        spar_jsonl=args.spar_jsonl,
+        llava_jsonl=args.llava_jsonl,
+        spar_cache_root=spar_cache,
+        llava_cache_root=llava_cache,
+        steps=args.steps,
+        geometry_on_ratio=args.geometry_on_ratio,
+        num_geo_tokens=args.num_geo_tokens,
+        stage1_checkpoint=args.stage1_checkpoint,
+        lr_lora=args.lr_lora,
+        lr_geo=args.lr_geo,
+        max_text_tokens=args.max_text_tokens,
+        max_grad_norm=args.max_grad_norm,
+        model_dtype=args.model_dtype,
+        batch_size=args.batch_size,
+        max_cached_samples_per_dataset=args.max_cached_samples_per_dataset,
+        log_every=args.log_every,
+        save_every=args.save_every,
     )
+    if int(os.environ.get("RANK", "0")) == 0:
+        print(result)
 
 
 if __name__ == "__main__":

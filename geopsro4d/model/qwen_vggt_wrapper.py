@@ -77,6 +77,9 @@ class QwenVGGTWrapper(nn.Module):
         projected = self.geo_projector(tokens)
         return self.geometry_gate(projected)
 
+    def forward(self, cache_data: dict[str, Any], mode: str = GEOMETRY_NORMAL) -> torch.Tensor:
+        return self.geometry_inputs_embeds(cache_data, mode=mode)
+
     def load_geometry(
         self,
         sample_id: str,
