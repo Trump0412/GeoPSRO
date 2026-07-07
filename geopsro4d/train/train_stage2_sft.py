@@ -54,6 +54,7 @@ def run_qwen_smoke(
     lr_lora: float,
     lr_geo: float,
     max_text_tokens: int,
+    max_grad_norm: float,
 ) -> dict[str, float | int | str]:
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -79,6 +80,9 @@ def run_qwen_smoke(
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         ),
     ).to(device)
+    for param in model.parameters():
+        if param.requires_grad:
+            param.data = param.data.float()
     model.train()
 
     hidden_size = int(model.config.text_config.hidden_size)
@@ -93,6 +97,7 @@ def run_qwen_smoke(
         {"params": [p for p in model.parameters() if p.requires_grad], "lr": lr_lora},
         {"params": list(wrapper.trainable_geo_parameters()), "lr": lr_geo},
     ]
+    trainable_params = [p for group in params for p in group["params"]]
     opt = torch.optim.AdamW(params)
 
     usable = []
@@ -121,7 +126,39 @@ def run_qwen_smoke(
 
         out = model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
         opt.zero_grad(set_to_none=True)
+        if not torch.isfinite(out.loss.detach()):
+            rows.append(
+                {
+                    "step": step + 1,
+                    "sample_id": sample.sample_id,
+                    "dataset": sample.dataset,
+                    "loss": float("nan"),
+                    "geometry_mode": mode,
+                    "gate": float(wrapper.geometry_gate.value().detach().float().mean().cpu()),
+                    "seq_len": int(inputs_embeds.shape[1]),
+                    "skipped": 1,
+                    "skip_reason": "nonfinite_loss",
+                }
+            )
+            continue
         out.loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
+        if not torch.isfinite(grad_norm):
+            opt.zero_grad(set_to_none=True)
+            rows.append(
+                {
+                    "step": step + 1,
+                    "sample_id": sample.sample_id,
+                    "dataset": sample.dataset,
+                    "loss": float(out.loss.detach().float().cpu()),
+                    "geometry_mode": mode,
+                    "gate": float(wrapper.geometry_gate.value().detach().float().mean().cpu()),
+                    "seq_len": int(inputs_embeds.shape[1]),
+                    "skipped": 1,
+                    "skip_reason": "nonfinite_grad",
+                }
+            )
+            continue
         opt.step()
         rows.append(
             {
@@ -132,6 +169,8 @@ def run_qwen_smoke(
                 "geometry_mode": mode,
                 "gate": float(wrapper.geometry_gate.value().detach().float().mean().cpu()),
                 "seq_len": int(inputs_embeds.shape[1]),
+                "grad_norm": float(grad_norm.detach().float().cpu()),
+                "skipped": 0,
             }
         )
 
@@ -187,9 +226,10 @@ def main() -> None:
     parser.add_argument("--qwen-smoke", action="store_true")
     parser.add_argument("--model-path", type=Path, default=Path("/mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct"))
     parser.add_argument("--num-geo-tokens", type=int, default=64)
-    parser.add_argument("--lr-lora", type=float, default=1e-5)
-    parser.add_argument("--lr-geo", type=float, default=5e-5)
+    parser.add_argument("--lr-lora", type=float, default=1e-6)
+    parser.add_argument("--lr-geo", type=float, default=1e-5)
     parser.add_argument("--max-text-tokens", type=int, default=1024)
+    parser.add_argument("--max-grad-norm", type=float, default=1.0)
     args = parser.parse_args()
     if args.smoke:
         print(run_smoke(args.output, args.steps, args.geometry_on_ratio))
@@ -215,6 +255,7 @@ def main() -> None:
                 lr_lora=args.lr_lora,
                 lr_geo=args.lr_geo,
                 max_text_tokens=args.max_text_tokens,
+                max_grad_norm=args.max_grad_norm,
             )
         )
         return
