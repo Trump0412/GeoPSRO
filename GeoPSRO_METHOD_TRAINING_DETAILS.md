@@ -495,6 +495,34 @@ Required go/no-go checks before the first long run:
 7. Normal geometry beats zero/shuffle on at least one held-out probe.
 ```
 
+Current implementation validation, 2026-07-07:
+
+- Qwen backbone path:
+  `/mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct`.
+- Runtime environment:
+  `/mnt/guojh/lq/new/conda/envs/geobridge-verl`.
+- Stage 2 entrypoint is active:
+  `scripts/run_stage2_sft.sh`.
+- Stage 2 loads Stage 1 geometry adapter from
+  `outputs/stage1_qwen2b_smoke_50/geo_adapter.pt` by default.
+- Stage 2 uses compact VGGT pilot cache by default:
+  `cache/vggt_pilot/spar_1k` and `cache/vggt_pilot/llava_hound_1k`.
+- Available pilot cache coverage is 1024 SPAR samples plus 1024 LLaVA-Hound
+  samples. This is enough for smoke and short pilot runs, not a full epoch over
+  the 297806-sample manifest.
+- The all-zero geometry dropout prefix was replaced by a learned null geometry
+  prefix. A diagnostic zero/null sample now has finite loss and `bad_count=0`
+  non-finite gradients.
+- Stage 2 bf16 smoke passed after the null-prefix change.
+- Batch sweep on GPU6 with bf16:
+  batch4, batch8, and batch16 passed; batch32 OOMed. Because sequence length can
+  vary, batch8 is the conservative default for immediate pilots, while batch16 is
+  usable for shorter or length-capped runs.
+- Stage 2 batch8 100-step pilot passed with zero skipped steps:
+  output `outputs/stage2_sft_pilot_b8_100`, mean loss 2.1108, median loss 2.1342,
+  max sequence length 476, observed geometry-on ratio 0.69625, and gate drift
+  from 0.199962 to 0.199986.
+
 ## 10. First Run Recommendation
 
 Recommended first experimental sequence:
@@ -510,7 +538,8 @@ Stage 1:
 
 Stage 2:
   Start with LoRA.
-  global_batch_size=64.
+  Start with bf16 batch_size=8 on one 80GB GPU.
+  Use batch_size=16 only after checking max sequence length and free memory.
   Run 500-step check, then 1 epoch.
 
 Stage 3:
