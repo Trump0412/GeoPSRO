@@ -39,3 +39,24 @@ def save_adapter(output: str | Path, wrapper: QwenVGGTWrapper, metrics: dict[str
         output / "geo_adapter.pt",
     )
     write_json(output / "metrics.json", metrics)
+
+
+def load_adapter(checkpoint: str | Path, wrapper: QwenVGGTWrapper, *, strict: bool = False) -> dict[str, Any]:
+    state = torch.load(checkpoint, map_location="cpu")
+    modules = {
+        "geo_tokenizer": wrapper.geo_tokenizer,
+        "geo_resampler": wrapper.geo_resampler,
+        "geo_projector": wrapper.geo_projector,
+        "geometry_gate": wrapper.geometry_gate,
+    }
+    for key, module in modules.items():
+        if key in state:
+            module.load_state_dict(state[key], strict=strict)
+        elif strict:
+            raise KeyError(f"Missing adapter state: {key}")
+    null_geo_embeds = state.get("null_geo_embeds")
+    if null_geo_embeds is not None and tuple(null_geo_embeds.shape) == tuple(wrapper.null_geo_embeds.shape):
+        wrapper.null_geo_embeds.data.copy_(null_geo_embeds)
+    elif strict:
+        raise KeyError("Missing or incompatible adapter state: null_geo_embeds")
+    return state.get("metrics", {})

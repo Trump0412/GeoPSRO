@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import json
 import random
+from collections import Counter
 from pathlib import Path
 
 import torch
@@ -10,7 +12,7 @@ import torch
 from geopsro4d.data.schema import normalize_sample
 from geopsro4d.geometry.vggt_cache import VGGTCache
 from geopsro4d.model.qwen_vggt_wrapper import QwenVGGTWrapper
-from geopsro4d.train.common import make_smoke_cache, make_smoke_model, save_adapter
+from geopsro4d.train.common import load_adapter, make_smoke_cache, make_smoke_model, save_adapter
 from geopsro4d.utils.io import ensure_dir, iter_jsonl, write_json, write_jsonl
 from geopsro4d.utils.seed import seed_everything
 
@@ -51,11 +53,16 @@ def run_qwen_smoke(
     steps: int,
     geometry_on_ratio: float,
     num_geo_tokens: int,
+    stage1_checkpoint: Path | None,
     lr_lora: float,
     lr_geo: float,
     max_text_tokens: int,
     max_grad_norm: float,
     model_dtype: str,
+    batch_size: int,
+    max_cached_samples_per_dataset: int | None,
+    log_every: int,
+    save_every: int,
 ) -> dict[str, float | int | str]:
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -97,6 +104,9 @@ def run_qwen_smoke(
         adapter_dim=256,
         num_geo_tokens=num_geo_tokens,
     ).to(device)
+    stage1_metrics = {}
+    if stage1_checkpoint:
+        stage1_metrics = load_adapter(stage1_checkpoint, wrapper)
     params = [
         {"params": [p for p in model.parameters() if p.requires_grad], "lr": lr_lora},
         {"params": list(wrapper.trainable_geo_parameters()), "lr": lr_geo},
@@ -104,91 +114,152 @@ def run_qwen_smoke(
     trainable_params = [p for group in params for p in group["params"]]
     opt = torch.optim.AdamW(params)
 
+    sample_limit = max(steps * batch_size * 4, 128)
+    if max_cached_samples_per_dataset is not None:
+        sample_limit = max_cached_samples_per_dataset
     usable = []
-    usable.extend(_cached_samples(spar_jsonl, spar_cache_root, limit=max(steps * 4, 128)))
-    usable.extend(_cached_samples(llava_jsonl, llava_cache_root, limit=max(steps * 4, 128)))
+    usable.extend(_cached_samples(spar_jsonl, spar_cache_root, limit=sample_limit))
+    usable.extend(_cached_samples(llava_jsonl, llava_cache_root, limit=sample_limit))
     if not usable:
         raise SystemExit("No cached samples found for Stage 2 Qwen smoke")
     random.shuffle(usable)
-
-    rows = []
-    geometry_on = 0
-    for step, (sample, cache_root) in zip(range(steps), itertools.cycle(usable)):
-        mode = "full" if random.random() < geometry_on_ratio else "zero"
-        geometry_on += int(mode == "full")
-        cache_data = VGGTCache(cache_root).load(sample.sample_id)
-        prompt_ids, answer_ids = _encode_prompt_answer(tokenizer, sample.question, sample.answer, max_text_tokens)
-        prompt_ids = prompt_ids.to(device)
-        answer_ids = answer_ids.to(device)
-        input_ids = torch.cat([prompt_ids, answer_ids], dim=1)
-        text_embeds = model.get_input_embeddings()(input_ids)
-        geo = wrapper.geometry_inputs_embeds(cache_data, mode=mode).to(device=device, dtype=text_embeds.dtype)
-        inputs_embeds = torch.cat([geo, text_embeds], dim=1)
-        attention_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.long, device=device)
-        labels = torch.full(inputs_embeds.shape[:2], -100, dtype=torch.long, device=device)
-        labels[:, geo.shape[1] + prompt_ids.shape[1] :] = answer_ids
-
-        out = model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
-        opt.zero_grad(set_to_none=True)
-        if not torch.isfinite(out.loss.detach()):
-            rows.append(
-                {
-                    "step": step + 1,
-                    "sample_id": sample.sample_id,
-                    "dataset": sample.dataset,
-                    "loss": float("nan"),
-                    "geometry_mode": mode,
-                    "gate": float(wrapper.geometry_gate.value().detach().float().mean().cpu()),
-                    "seq_len": int(inputs_embeds.shape[1]),
-                    "skipped": 1,
-                    "skip_reason": "nonfinite_loss",
-                }
-            )
-            continue
-        out.loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
-        if not torch.isfinite(grad_norm):
-            opt.zero_grad(set_to_none=True)
-            rows.append(
-                {
-                    "step": step + 1,
-                    "sample_id": sample.sample_id,
-                    "dataset": sample.dataset,
-                    "loss": float(out.loss.detach().float().cpu()),
-                    "geometry_mode": mode,
-                    "gate": float(wrapper.geometry_gate.value().detach().float().mean().cpu()),
-                    "seq_len": int(inputs_embeds.shape[1]),
-                    "skipped": 1,
-                    "skip_reason": "nonfinite_grad",
-                }
-            )
-            continue
-        opt.step()
-        rows.append(
-            {
-                "step": step + 1,
-                "sample_id": sample.sample_id,
-                "dataset": sample.dataset,
-                "loss": float(out.loss.detach().float().cpu()),
-                "geometry_mode": mode,
-                "gate": float(wrapper.geometry_gate.value().detach().float().mean().cpu()),
-                "seq_len": int(inputs_embeds.shape[1]),
-                "grad_norm": float(grad_norm.detach().float().cpu()),
-                "skipped": 0,
-            }
-        )
+    usable_iter = itertools.cycle(usable)
+    cache_handles: dict[Path, VGGTCache] = {}
 
     output = ensure_dir(output)
-    write_jsonl(output / "metrics.jsonl", rows)
+    metrics_path = output / "metrics.jsonl"
+    rows = []
+    geometry_on = 0
+    total_examples = 0
+    with metrics_path.open("w", encoding="utf-8") as metrics_file:
+        for step in range(steps):
+            batch = []
+            for _ in range(batch_size):
+                sample, cache_root = next(usable_iter)
+                mode = "full" if random.random() < geometry_on_ratio else "zero"
+                geometry_on += int(mode == "full")
+                total_examples += 1
+                if mode == "full":
+                    cache = cache_handles.setdefault(cache_root, VGGTCache(cache_root))
+                    cache_data = cache.load(sample.sample_id)
+                else:
+                    cache_data = {}
+                batch.append(_make_training_example(model, tokenizer, wrapper, sample, cache_data, mode, max_text_tokens, device))
+
+            inputs_embeds, attention_mask, labels = _pad_training_examples(batch, device)
+            out = model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
+            opt.zero_grad(set_to_none=True)
+            row = _make_step_row(step + 1, batch, wrapper, out.loss, inputs_embeds)
+            if not torch.isfinite(out.loss.detach()):
+                row.update({"loss": float("nan"), "skipped": 1, "skip_reason": "nonfinite_loss"})
+                rows.append(row)
+                _write_metric(metrics_file, row, step + 1, log_every)
+                continue
+            out.loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
+            if not torch.isfinite(grad_norm):
+                opt.zero_grad(set_to_none=True)
+                row.update(
+                    {
+                        "loss": float(out.loss.detach().float().cpu()),
+                        "grad_norm": float("nan"),
+                        "skipped": 1,
+                        "skip_reason": "nonfinite_grad",
+                    }
+                )
+                rows.append(row)
+                _write_metric(metrics_file, row, step + 1, log_every)
+                continue
+            opt.step()
+            row.update({"loss": float(out.loss.detach().float().cpu()), "grad_norm": float(grad_norm.detach().float().cpu()), "skipped": 0})
+            rows.append(row)
+            _write_metric(metrics_file, row, step + 1, log_every)
+            if save_every > 0 and (step + 1) % save_every == 0:
+                checkpoint_dir = output / f"checkpoint_step_{step + 1}"
+                save_adapter(checkpoint_dir, wrapper, row)
+                model.save_pretrained(checkpoint_dir / "lora_adapter")
+
     final = {
         **rows[-1],
-        "geometry_on_ratio_observed": geometry_on / max(1, steps),
+        "geometry_on_ratio_observed": geometry_on / max(1, total_examples),
         "usable_cached_samples": len(usable),
         "model_path": str(model_path),
+        "stage1_checkpoint": str(stage1_checkpoint) if stage1_checkpoint else "",
+        "stage1_loss": stage1_metrics.get("loss", ""),
+        "batch_size": batch_size,
     }
     save_adapter(output, wrapper, final)
     model.save_pretrained(output / "lora_adapter")
     return final
+
+
+def _make_training_example(model, tokenizer, wrapper, sample, cache_data, mode: str, max_text_tokens: int, device: torch.device) -> dict[str, object]:
+    prompt_ids, answer_ids = _encode_prompt_answer(tokenizer, sample.question, sample.answer, max_text_tokens)
+    prompt_ids = prompt_ids.to(device)
+    answer_ids = answer_ids.to(device)
+    input_ids = torch.cat([prompt_ids, answer_ids], dim=1)
+    text_embeds = model.get_input_embeddings()(input_ids)
+    geo = wrapper.geometry_inputs_embeds(cache_data, mode=mode).to(device=device, dtype=text_embeds.dtype)
+    seq_embeds = torch.cat([geo, text_embeds], dim=1).squeeze(0)
+    seq_labels = torch.full((seq_embeds.shape[0],), -100, dtype=torch.long, device=device)
+    seq_labels[geo.shape[1] + prompt_ids.shape[1] :] = answer_ids.squeeze(0)
+    return {
+        "sample_id": sample.sample_id,
+        "dataset": sample.dataset,
+        "mode": mode,
+        "inputs_embeds": seq_embeds,
+        "labels": seq_labels,
+        "seq_len": int(seq_embeds.shape[0]),
+    }
+
+
+def _pad_training_examples(batch: list[dict[str, object]], device: torch.device) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    max_len = max(int(example["seq_len"]) for example in batch)
+    hidden = int(batch[0]["inputs_embeds"].shape[-1])
+    dtype = batch[0]["inputs_embeds"].dtype
+    inputs_embeds = torch.zeros(len(batch), max_len, hidden, dtype=dtype, device=device)
+    attention_mask = torch.zeros(len(batch), max_len, dtype=torch.long, device=device)
+    labels = torch.full((len(batch), max_len), -100, dtype=torch.long, device=device)
+    for idx, example in enumerate(batch):
+        seq_len = int(example["seq_len"])
+        inputs_embeds[idx, :seq_len] = example["inputs_embeds"]
+        attention_mask[idx, :seq_len] = 1
+        labels[idx, :seq_len] = example["labels"]
+    return inputs_embeds, attention_mask, labels
+
+
+def _make_step_row(step: int, batch: list[dict[str, object]], wrapper: QwenVGGTWrapper, loss: torch.Tensor, inputs_embeds: torch.Tensor) -> dict[str, object]:
+    modes = Counter(str(example["mode"]) for example in batch)
+    datasets = Counter(str(example["dataset"]) for example in batch)
+    row: dict[str, object] = {
+        "step": step,
+        "loss": float(loss.detach().float().cpu()) if torch.isfinite(loss.detach()) else float("nan"),
+        "geometry_mode": next(iter(modes)) if len(modes) == 1 else "mixed",
+        "geometry_full_count": modes.get("full", 0),
+        "geometry_zero_count": modes.get("zero", 0),
+        "datasets": dict(datasets),
+        "gate": float(wrapper.geometry_gate.value().detach().float().mean().cpu()),
+        "batch_size": len(batch),
+        "seq_len_max": int(inputs_embeds.shape[1]),
+        "seq_len_min": min(int(example["seq_len"]) for example in batch),
+        "sample_ids": [str(example["sample_id"]) for example in batch[:4]],
+    }
+    if len(batch) == 1:
+        row.update(
+            {
+                "sample_id": str(batch[0]["sample_id"]),
+                "dataset": str(batch[0]["dataset"]),
+                "seq_len": int(batch[0]["seq_len"]),
+            }
+        )
+    return row
+
+
+def _write_metric(metrics_file, row: dict[str, object], step: int, log_every: int) -> None:
+    metrics_file.write(json.dumps(row, ensure_ascii=True, sort_keys=True) + "\n")
+    if log_every > 0 and step % log_every == 0:
+        metrics_file.flush()
+        print(row, flush=True)
 
 
 def _cached_samples(jsonl: Path, cache_root: Path, *, limit: int) -> list[tuple[object, Path]]:
@@ -235,6 +306,10 @@ def main() -> None:
     parser.add_argument("--max-text-tokens", type=int, default=1024)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--model-dtype", choices=["float32", "bfloat16"], default="float32")
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--max-cached-samples-per-dataset", type=int)
+    parser.add_argument("--log-every", type=int, default=10)
+    parser.add_argument("--save-every", type=int, default=0)
     args = parser.parse_args()
     if args.smoke:
         print(run_smoke(args.output, args.steps, args.geometry_on_ratio))
@@ -257,18 +332,48 @@ def main() -> None:
                 steps=args.steps,
                 geometry_on_ratio=args.geometry_on_ratio,
                 num_geo_tokens=args.num_geo_tokens,
+                stage1_checkpoint=args.stage1_checkpoint,
                 lr_lora=args.lr_lora,
                 lr_geo=args.lr_geo,
                 max_text_tokens=args.max_text_tokens,
                 max_grad_norm=args.max_grad_norm,
                 model_dtype=args.model_dtype,
+                batch_size=args.batch_size,
+                max_cached_samples_per_dataset=args.max_cached_samples_per_dataset,
+                log_every=args.log_every,
+                save_every=args.save_every,
             )
         )
         return
-    if not args.stage1_checkpoint or not args.spar_jsonl or not args.llava_jsonl or not args.cache_root:
-        raise SystemExit("Stage 2 real run requires --stage1-checkpoint, --spar-jsonl, --llava-jsonl and --cache-root")
-    write_json(args.output / "launch_plan.json", vars(args))
-    raise SystemExit("Stage 2 launch plan written; run the server script with real Qwen/LoRA settings.")
+    if not args.stage1_checkpoint or not args.spar_jsonl or not args.llava_jsonl:
+        raise SystemExit("Stage 2 real run requires --stage1-checkpoint, --spar-jsonl and --llava-jsonl")
+    spar_cache = args.spar_cache_root or (args.cache_root / "spar" if args.cache_root else None)
+    llava_cache = args.llava_cache_root or (args.cache_root / "llava_hound" if args.cache_root else None)
+    if spar_cache is None or llava_cache is None:
+        raise SystemExit("Stage 2 real run requires --cache-root or both --spar-cache-root and --llava-cache-root")
+    print(
+        run_qwen_smoke(
+            output=args.output,
+            model_path=args.model_path,
+            spar_jsonl=args.spar_jsonl,
+            llava_jsonl=args.llava_jsonl,
+            spar_cache_root=spar_cache,
+            llava_cache_root=llava_cache,
+            steps=args.steps,
+            geometry_on_ratio=args.geometry_on_ratio,
+            num_geo_tokens=args.num_geo_tokens,
+            stage1_checkpoint=args.stage1_checkpoint,
+            lr_lora=args.lr_lora,
+            lr_geo=args.lr_geo,
+            max_text_tokens=args.max_text_tokens,
+            max_grad_norm=args.max_grad_norm,
+            model_dtype=args.model_dtype,
+            batch_size=args.batch_size,
+            max_cached_samples_per_dataset=args.max_cached_samples_per_dataset,
+            log_every=args.log_every,
+            save_every=args.save_every,
+        )
+    )
 
 
 if __name__ == "__main__":
