@@ -25,9 +25,13 @@ def psro_prompt(sample: GeoSample) -> str:
     choices_block = f"\nChoices:\n{choices}" if choices else ""
     return (
         "You should solve the problem using the following format:\n\n"
-        "Observation: describe relevant entities, spatial relations, views, and visible states.\n"
-        "Transition: describe changes across frames/images, including motion, relation changes, occlusion, or viewpoint changes.\n"
-        "Derivation: reason from the observation and transition to the answer.\n"
-        "Answer: provide the final answer only.\n\n"
+        "<think>\n"
+        "Spatial Observation: write one concise sentence describing the relevant visual-spatial evidence.\n"
+        "Spatial Transition: write one concise sentence describing the key spatial change, state continuity, or multi-frame relation.\n"
+        "Answer Derivation: write one concise sentence explaining how the previous two parts determine the final answer.\n"
+        "</think>\n"
+        "<answer>\n"
+        "Write only the final answer. For multiple-choice questions, write only the option letter.\n"
+        "</answer>\n\n"
         f"Question: {sample.question}{choices_block}\n"
     )

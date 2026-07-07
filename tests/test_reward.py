@@ -7,6 +7,38 @@ from geopsro4d.reward.reward_fn import compute_reward
 
 def test_correct_answer_with_valid_psro() -> None:
     text = (
+        "<think>\n"
+        "Spatial Observation: the cup is left of the box and visible in the frame.\n"
+        "Spatial Transition: across frames, the cup moves closer while the relation changes.\n"
+        "Answer Derivation: therefore the visual evidence and spatial transition imply option B.\n"
+        "</think>\n"
+        "<answer>B</answer>"
+    )
+    reward = compute_reward(text, "B", ["A text", "B text"], "dynamic")
+    assert reward["r_acc"] == 1.0
+    assert reward["r_psro_fmt"] == 1.0
+    assert reward["R_format"] == 1.0
+    assert reward["R_words"] > 0.0
+    assert reward["reward"] > 1.0
+
+
+def test_wrong_answer_with_valid_psro_gets_no_process_bonus() -> None:
+    text = (
+        "<think>\n"
+        "Spatial Observation: the cup is left of the box and visible in the frame.\n"
+        "Spatial Transition: across frames, the cup moves closer while the relation changes.\n"
+        "Answer Derivation: therefore the visual evidence and spatial transition imply option B.\n"
+        "</think>\n"
+        "<answer>B</answer>"
+    )
+    reward = compute_reward(text, "A", ["A text", "B text"], "dynamic")
+    assert reward["r_acc"] == 0.0
+    assert reward["R_words"] == 0.0
+    assert reward["reward"] == 0.5
+
+
+def test_plain_psro_format_remains_parseable() -> None:
+    text = (
         "Observation: the cup is left of the box.\n"
         "Transition: across frames, the cup moves closer.\n"
         "Derivation: the observation and transition imply option B.\n"
@@ -14,20 +46,7 @@ def test_correct_answer_with_valid_psro() -> None:
     )
     reward = compute_reward(text, "B", ["A text", "B text"], "dynamic")
     assert reward["r_acc"] == 1.0
-    assert reward["r_psro_fmt"] == 1.0
-    assert reward["reward"] > 1.0
-
-
-def test_wrong_answer_with_valid_psro_gets_no_process_bonus() -> None:
-    text = (
-        "Observation: the cup is left of the box.\n"
-        "Transition: across frames, the cup moves closer.\n"
-        "Derivation: the observation and transition imply option B.\n"
-        "Answer: B"
-    )
-    reward = compute_reward(text, "A", ["A text", "B text"], "dynamic")
-    assert reward["r_acc"] == 0.0
-    assert reward["reward"] < 0.5
+    assert reward["R_format"] >= 0.6
 
 
 def test_multiple_conflicting_answers_returns_none() -> None:

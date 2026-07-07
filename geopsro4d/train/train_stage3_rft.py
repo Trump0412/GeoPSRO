@@ -13,10 +13,12 @@ from geopsro4d.utils.io import ensure_dir, write_json, write_jsonl
 def run_smoke(output: Path) -> dict[str, float | int]:
     output = ensure_dir(output)
     response = (
-        "Observation: the red cube is left of the blue cube in the first frame.\n"
-        "Transition: across frames, the red cube moves to the right while the blue cube remains visible.\n"
-        "Derivation: the observation and transition show the red cube changes position relative to the blue cube.\n"
-        "Answer: A"
+        "<think>\n"
+        "Spatial Observation: the red cube is left of the blue cube in the first frame.\n"
+        "Spatial Transition: across frames, the red cube moves to the right while the blue cube remains visible.\n"
+        "Answer Derivation: the observation and transition show the red cube changes position relative to the blue cube.\n"
+        "</think>\n"
+        "<answer>A</answer>"
     )
     reward = compute_reward(response, "A", ["red moves right", "blue moves left"], "dynamic_transition")
     row = {"sample_id": "smoke", "response": response, **reward}
