@@ -76,6 +76,17 @@ def _cleanup_distributed(dist_ctx: dict[str, int | bool | torch.device]) -> None
         dist.destroy_process_group()
 
 
+def _average_gradients(parameters, dist_ctx: dict[str, int | bool | torch.device]) -> None:
+    if not dist_ctx["distributed"] or not dist.is_initialized():
+        return
+    world_size = int(dist_ctx["world_size"])
+    for param in parameters:
+        if param.grad is None:
+            continue
+        dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+        param.grad.div_(world_size)
+
+
 def run_qwen_smoke(
     *,
     output: Path,
@@ -145,10 +156,9 @@ def run_qwen_smoke(
         stage1_metrics = load_adapter(stage1_checkpoint, wrapper)
     if dist_ctx["distributed"]:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[dist_ctx["local_rank"]], find_unused_parameters=False)
-        wrapper = torch.nn.parallel.DistributedDataParallel(wrapper, device_ids=[dist_ctx["local_rank"]], find_unused_parameters=True)
     params = [
         {"params": [p for p in model.parameters() if p.requires_grad], "lr": lr_lora},
-        {"params": [p for p in _unwrap_model(wrapper).trainable_geo_parameters()], "lr": lr_geo},
+        {"params": [p for p in wrapper.trainable_geo_parameters()], "lr": lr_geo},
     ]
     trainable_params = [p for group in params for p in group["params"]]
     opt = torch.optim.AdamW(params)
@@ -199,6 +209,7 @@ def run_qwen_smoke(
                 _write_metric(metrics_file, row, step + 1, log_every if is_main else 0)
                 continue
             out.loss.backward()
+            _average_gradients(wrapper.trainable_geo_parameters(), dist_ctx)
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
             if not torch.isfinite(grad_norm):
                 opt.zero_grad(set_to_none=True)
@@ -220,7 +231,7 @@ def run_qwen_smoke(
             if save_every > 0 and (step + 1) % save_every == 0:
                 if is_main:
                     checkpoint_dir = output / f"checkpoint_step_{step + 1}"
-                    save_adapter(checkpoint_dir, _unwrap_model(wrapper), row)
+                    save_adapter(checkpoint_dir, wrapper, row)
                     _unwrap_model(model).save_pretrained(checkpoint_dir / "lora_adapter")
                 _barrier(dist_ctx)
 
@@ -237,7 +248,7 @@ def run_qwen_smoke(
         "batch_size": batch_size,
     }
     if is_main:
-        save_adapter(output, _unwrap_model(wrapper), final)
+        save_adapter(output, wrapper, final)
         _unwrap_model(model).save_pretrained(output / "lora_adapter")
     _barrier(dist_ctx)
     _cleanup_distributed(dist_ctx)
