@@ -10,7 +10,8 @@ prompt format, and pre-experiment reasonableness checks for GeoPSRO-4D.
 GeoPSRO-4D is a geometry-augmented post-training pipeline for dynamic 4D spatial
 reasoning. The model combines:
 
-- Qwen3-VL-4B-Instruct as the main multimodal language backbone.
+- Qwen3-VL-2B-Instruct as the main multimodal language backbone for the first
+  experiment.
 - VGGT-1B as a frozen RGB-to-geometry branch.
 - A trainable geometry adapter stack:
   GeoTokenizer, GeoResampler, GeoProjector, and GeometryGate.
@@ -92,6 +93,17 @@ Task:
 - Run VGGT once.
 - Save reusable cached geometry features.
 
+Cache policy:
+
+- Do not cache full-resolution VGGT depth maps or point maps by default.
+- Use compact pooled cache only:
+  `cache_profile=compact_pool16_float16`.
+- Cache only data that will be consumed by the next pilot or formal run.
+- Prefer pilot caches first, then expand only after cache hit rate, disk usage,
+  and dataloader speed are acceptable.
+- Avoid blindly caching all 234K SPAR, 64K LLaVA-Hound, or 50K Stage3 samples
+  before the training/eval subset is finalized.
+
 Data:
 
 - SPAR / SPAR-7M-RGBD or SPAR-234K subset for Stage 1 and Stage 2.
@@ -106,6 +118,8 @@ Checks:
 - frame count should match the configured sampler
 - no ground-truth depth, pose, trajectory, or benchmark metadata is used as
   inference input
+- compact cache file size should remain small enough that dataloader IO is not
+  the bottleneck
 
 ## 5. Stage 1: VGGT Geometry Alignment
 

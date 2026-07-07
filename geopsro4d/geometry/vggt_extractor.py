@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
 
 import torch
-from PIL import Image
+import torch.nn.functional as F
 
 from geopsro4d.data.frame_sampler import VIDEO_EXTS, sample_frame_selection, sample_video_frames
 from geopsro4d.data.schema import normalize_sample
@@ -20,10 +19,20 @@ LOGGER = get_logger(__name__)
 
 
 class VGGTExtractor:
-    def __init__(self, model_name_or_path: str, *, source_path: str | Path | None = None, device: str = "cuda") -> None:
+    def __init__(
+        self,
+        model_name_or_path: str,
+        *,
+        source_path: str | Path | None = None,
+        device: str = "cuda",
+        cache_resolution: int = 16,
+        cache_dtype: str = "float16",
+    ) -> None:
         self.model_name_or_path = model_name_or_path
         self.source_path = Path(source_path) if source_path else None
         self.device = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
+        self.cache_resolution = int(cache_resolution)
+        self.cache_dtype = cache_dtype
         self._model = None
 
     def load_model(self):
@@ -61,9 +70,9 @@ class VGGTExtractor:
             extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, images.shape[-2:])
             extrinsic = extrinsic.squeeze(0).detach().cpu().float()
             intrinsic = intrinsic.squeeze(0).detach().cpu().float()
-        depth = _chw(pred.get("depth"))
-        point_map = _chw(pred.get("world_points"))
-        confidence = _squeeze_batch(pred.get("world_points_conf"))
+        depth = _compact_tensor(_chw(pred.get("depth")), self.cache_resolution, self.cache_dtype)
+        point_map = _compact_tensor(_chw(pred.get("world_points")), self.cache_resolution, self.cache_dtype)
+        confidence = _compact_tensor(_chw(pred.get("world_points_conf")), self.cache_resolution, self.cache_dtype)
         height, width = images.shape[-2:]
         return {
             "sample_id": sample_id,
@@ -79,6 +88,7 @@ class VGGTExtractor:
             "features": None,
             "geometry_valid": True,
             "nan_count": _nan_count([depth, point_map, confidence]),
+            "cache_profile": f"compact_pool{self.cache_resolution}_{self.cache_dtype}",
         }
 
 
@@ -91,11 +101,38 @@ def extract_dataset(
     source_path: Path | None,
     overwrite: bool,
     device: str,
+    max_samples: int | None = None,
+    num_shards: int = 1,
+    shard_index: int = 0,
+    log_every: int = 25,
+    cache_resolution: int = 16,
+    cache_dtype: str = "float16",
 ) -> None:
+    if num_shards <= 0:
+        raise ValueError("num_shards must be positive")
+    if shard_index < 0 or shard_index >= num_shards:
+        raise ValueError("shard_index must be in [0, num_shards)")
+    cache_root.mkdir(parents=True, exist_ok=True)
     cache = VGGTCache(cache_root)
-    extractor = VGGTExtractor(model_name_or_path, source_path=source_path, device=device)
+    extractor = VGGTExtractor(
+        model_name_or_path,
+        source_path=source_path,
+        device=device,
+        cache_resolution=cache_resolution,
+        cache_dtype=cache_dtype,
+    )
     logs = []
-    for row in iter_jsonl(dataset_json):
+    processed = 0
+    log_path = cache_root / (
+        f"vggt_cache_log.shard{shard_index:03d}-of-{num_shards:03d}.jsonl"
+        if num_shards > 1
+        else "vggt_cache_log.jsonl"
+    )
+    for row_idx, row in enumerate(iter_jsonl(dataset_json)):
+        if row_idx % num_shards != shard_index:
+            continue
+        if max_samples is not None and processed >= max_samples:
+            break
         sample = normalize_sample(row, default_dataset=dataset_json.stem)
         if cache.exists(sample.sample_id) and not overwrite:
             continue
@@ -118,10 +155,14 @@ def extract_dataset(
                 "frame_indices": data.get("frame_indices"),
                 "geometry_valid": data.get("geometry_valid", False),
                 "nan_count": data.get("nan_count", 0),
+                "cache_profile": data.get("cache_profile", "unknown"),
                 "cache_path": str(cache.path_for(sample.sample_id)),
             }
         )
-    write_jsonl(cache_root / "vggt_cache_log.jsonl", logs)
+        processed += 1
+        if log_every > 0 and processed % log_every == 0:
+            write_jsonl(log_path, logs)
+    write_jsonl(log_path, logs)
 
 
 def main() -> None:
@@ -133,6 +174,12 @@ def main() -> None:
     parser.add_argument("--source_path", type=Path)
     parser.add_argument("--overwrite", default="false")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--max_samples", type=int)
+    parser.add_argument("--num_shards", type=int, default=1)
+    parser.add_argument("--shard_index", type=int, default=0)
+    parser.add_argument("--log_every", type=int, default=25)
+    parser.add_argument("--cache_resolution", type=int, default=16)
+    parser.add_argument("--cache_dtype", choices=["float16", "bfloat16", "float32"], default="float16")
     args = parser.parse_args()
     extract_dataset(
         dataset_json=args.dataset_json,
@@ -142,6 +189,12 @@ def main() -> None:
         source_path=args.source_path,
         overwrite=args.overwrite.lower() in {"1", "true", "yes"},
         device=args.device,
+        max_samples=args.max_samples,
+        num_shards=args.num_shards,
+        shard_index=args.shard_index,
+        log_every=args.log_every,
+        cache_resolution=args.cache_resolution,
+        cache_dtype=args.cache_dtype,
     )
 
 
@@ -171,8 +224,23 @@ def _chw(tensor: torch.Tensor | None) -> torch.Tensor | None:
     tensor = _squeeze_batch(tensor)
     if tensor is None:
         return None
+    if tensor.ndim == 3:
+        return tensor.unsqueeze(1).contiguous()
     if tensor.ndim == 4 and tensor.shape[-1] in {1, 2, 3, 4}:
         return tensor.permute(0, 3, 1, 2).contiguous()
+    return tensor
+
+
+def _compact_tensor(tensor: torch.Tensor | None, resolution: int, dtype: str) -> torch.Tensor | None:
+    if tensor is None:
+        return None
+    tensor = tensor.detach().cpu().float()
+    if resolution > 0 and tensor.ndim == 4:
+        tensor = F.adaptive_avg_pool2d(tensor, (resolution, resolution))
+    if dtype == "float16":
+        return tensor.half()
+    if dtype == "bfloat16":
+        return tensor.bfloat16()
     return tensor
 
 

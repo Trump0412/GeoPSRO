@@ -1,5 +1,5 @@
 model:
-  base_model: /mnt/guojh/lq/new/weights/base_models/Qwen3-VL-4B-Instruct
+  base_model: /mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct
   init_checkpoint: outputs/stage1_vggt_align/geo_adapter.pt
   num_geo_tokens: 64
   use_lora: true

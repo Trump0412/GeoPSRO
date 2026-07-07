@@ -46,7 +46,7 @@ The scripts default to the shared server layout used by previous GeoThinker/GeoB
 
 ```text
 /mnt/guojh/lq/new/conda/envs/geothinker
-/mnt/guojh/lq/new/weights/base_models/Qwen3-VL-4B-Instruct
+/mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct
 /mnt/guojh/lq/new/weights/base_models/VGGT-1B
 /mnt/guojh/lq/new/verl
 ```
