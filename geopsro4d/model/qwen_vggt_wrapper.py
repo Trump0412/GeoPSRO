@@ -68,7 +68,9 @@ class QwenVGGTWrapper(nn.Module):
         if mode not in GEOMETRY_MODES:
             raise ValueError(f"Unknown geometry mode: {mode}")
         device = next(self.geo_projector.parameters()).device
-        if mode in {GEOMETRY_ZERO, GEOMETRY_DROP}:
+        if mode == GEOMETRY_ZERO:
+            return torch.zeros_like(self.null_geo_embeds.to(device))
+        if mode == GEOMETRY_DROP:
             return self.geometry_gate(self.null_geo_embeds.to(device))
         features, mask = self.geo_tokenizer(cache_data, mode=mode)
         features = features.to(device)

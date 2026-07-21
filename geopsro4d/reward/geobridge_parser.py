@@ -1,4 +1,4 @@
-"""Structured rationale parsers for GeoBridge PSRO."""
+"""Structured rationale parsers for gap-4D PSRO."""
 
 from __future__ import annotations
 

@@ -22,4 +22,4 @@ data:
       vggt_cache_root: cache/vggt/spatialladder
 runtime:
   output_dir: outputs/stage3_psro_rft
-  verl_root: /mnt/guojh/lq/new/verl
+  verl_root: external/verl

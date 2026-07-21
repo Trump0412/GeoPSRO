@@ -1,5 +1,5 @@
 model:
-  base_model: /mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct
+  base_model: models/Qwen3-VL-2B-Instruct
   init_checkpoint: outputs/stage1_vggt_align/geo_adapter.pt
   num_geo_tokens: 64
   use_lora: true
@@ -21,11 +21,11 @@ train:
 data:
   datasets:
     - name: spar
-      jsonl: data/spar/train.jsonl
+      jsonl: data/manifests/spatialfit_formal_f8/spar.jsonl
       weight: 0.7
       vggt_cache_root: cache/vggt/spar
     - name: llava_hound
-      jsonl: data/llava_hound/train.jsonl
+      jsonl: data/manifests/spatialfit_formal_f8/llava_hound.jsonl
       weight: 0.3
       vggt_cache_root: cache/vggt/llava_hound
 runtime:

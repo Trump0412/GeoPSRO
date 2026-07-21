@@ -1,21 +1,21 @@
 model:
-  vggt_model: /mnt/guojh/lq/new/weights/base_models/VGGT-1B
-  vggt_source: /mnt/guojh/lq/new/GeoWire/third_party/vggt
+  vggt_model: models/VGGT-1B
+  vggt_source: external/vggt
   device: cuda
 data:
   num_frames: 8
   datasets:
     - name: spar
-      jsonl: data/spar/train.jsonl
+      jsonl: data/manifests/spatialfit_formal_f8/spar.jsonl
       cache_root: cache/vggt/spar
     - name: llava_hound
-      jsonl: data/llava_hound/train.jsonl
+      jsonl: data/manifests/spatialfit_formal_f8/llava_hound.jsonl
       cache_root: cache/vggt/llava_hound
     - name: spatialladder
-      jsonl: data/spatialladder/train.jsonl
+      jsonl: data/manifests/stage3/spatialladder_multi_video.jsonl
       cache_root: cache/vggt/spatialladder
     - name: 4dthinker
-      jsonl: data/4dthinker/train.jsonl
+      jsonl: data/manifests/stage3/4dthinker_4drl.jsonl
       cache_root: cache/vggt/4dthinker
     - name: dsr
       jsonl: data/dsr/test.jsonl

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN="${PYTHON_BIN:-/mnt/guojh/lq/new/conda/envs/geobridge-verl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
 TORCHRUN_BIN="${TORCHRUN_BIN:-$(dirname "${PYTHON_BIN}")/torchrun}"
 OUTPUT="${OUTPUT:-outputs/stage2_vggt_sft}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
@@ -10,11 +10,11 @@ export PYTHONPATH="${PYTHONPATH:-$PWD}"
 
 args=(
   --stage1-checkpoint "${STAGE1_CHECKPOINT:-outputs/stage1_qwen2b_smoke_50/geo_adapter.pt}"
-  --model-path "${MODEL_PATH:-/mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct}"
-  --spar-jsonl "${SPAR_JSONL:-/mnt/guojh/lq/new/datasets/manifests/geowire_formal_f8/spar.jsonl}"
-  --llava-jsonl "${LLAVA_JSONL:-/mnt/guojh/lq/new/datasets/manifests/geowire_formal_f8/llava_hound.jsonl}"
-  --spar-cache-root "${SPAR_CACHE_ROOT:-cache/vggt_pilot/spar_1k}"
-  --llava-cache-root "${LLAVA_CACHE_ROOT:-cache/vggt_pilot/llava_hound_1k}"
+  --model-path "${MODEL_PATH:-models/Qwen3-VL-2B-Instruct}"
+  --spar-jsonl "${SPAR_JSONL:-data/manifests/spatialfit_formal_f8/spar.jsonl}"
+  --llava-jsonl "${LLAVA_JSONL:-data/manifests/spatialfit_formal_f8/llava_hound.jsonl}"
+  --spar-cache-root "${SPAR_CACHE_ROOT:-cache/vggt/spar}"
+  --llava-cache-root "${LLAVA_CACHE_ROOT:-cache/vggt/llava_hound}"
   --output "${OUTPUT}"
   --steps "${STEPS:-1000}"
   --batch-size "${BATCH_SIZE:-1}"

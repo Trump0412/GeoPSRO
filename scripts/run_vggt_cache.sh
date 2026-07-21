@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN="${PYTHON_BIN:-/mnt/guojh/lq/new/conda/envs/geothinker/bin/python}"
-VGGT_MODEL="${VGGT_MODEL:-/mnt/guojh/lq/new/weights/base_models/VGGT-1B}"
-VGGT_SOURCE="${VGGT_SOURCE:-/mnt/guojh/lq/new/GeoWire/third_party/vggt}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+VGGT_MODEL="${VGGT_MODEL:-models/VGGT-1B}"
+VGGT_SOURCE="${VGGT_SOURCE:-external/vggt}"
 DATASET_JSON="${DATASET_JSON:-data/spar/train.jsonl}"
 CACHE_ROOT="${CACHE_ROOT:-cache/vggt/spar}"
 NUM_FRAMES="${NUM_FRAMES:-8}"

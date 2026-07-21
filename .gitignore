@@ -20,3 +20,10 @@ results/**/*.safetensors
 .DS_Store
 .idea/
 .vscode/
+
+# Internal planning notes are kept locally but omitted from review releases.
+*_Codex_*.md
+*_Core_Idea.md
+*_METHOD_TRAINING_DETAILS.md
+*_PROGRESS.md
+logs/

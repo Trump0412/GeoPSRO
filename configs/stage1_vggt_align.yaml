@@ -1,6 +1,6 @@
 model:
-  base_model: /mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct
-  vggt_model: /mnt/guojh/lq/new/weights/base_models/VGGT-1B
+  base_model: models/Qwen3-VL-2B-Instruct
+  vggt_model: models/VGGT-1B
   num_geo_tokens: 64
   geometry_mode: normal
 train:
@@ -17,8 +17,8 @@ train:
   freeze_llm: true
   train_geo_adapter: true
 data:
-  train_jsonl: data/spar/train.jsonl
-  val_jsonl: data/spar/val.jsonl
+  train_jsonl: data/manifests/spatialfit_formal_f8/spar.jsonl
+  val_jsonl: data/manifests/spatialfit_formal_f8/spar.jsonl
   vggt_cache_root: cache/vggt/spar
 runtime:
   output_dir: outputs/stage1_vggt_align

@@ -1,4 +1,4 @@
-"""GeoBridge PSRO custom reward function for verl.
+"""gap-4D PSRO custom reward function for verl.
 
 Stage3 v1 uses a deliberately low-cost rule reward:
 
@@ -1124,10 +1124,10 @@ def compute_reward(
     choices: Sequence[str] | Mapping[str, str] | None = None,
     task_type: str | None = None,
 ) -> Dict[str, float | str]:
-    """GeoPSRO wrapper around the GeoBridge Stage3 reward.
+    """gap-4D wrapper around the Stage 3 reward.
 
     Keeps the lightweight local API used by smoke tests while the underlying
-    reward matches the old GeoBridge formula:
+    reward matches the specified Stage 3 formula:
     R_answer + 0.5 * R_format + 0.05 * R_words.
     """
 

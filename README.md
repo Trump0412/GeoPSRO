@@ -1,21 +1,57 @@
-# GeoPSRO-4D
+# gap-4D
 
-Geometry-augmented post-training pipeline for 4D spatial reasoning.
-
-This repository implements the design in:
-
-- `GeoPSRO4D_Core_Idea.md`
-- `GeoPSRO4D_Codex_Code_Implementation_Instructions.md`
-
-The method is intentionally **not** a trace-verifier system. It follows:
+gap-4D is a geometry-augmented post-training pipeline for dynamic 4D spatial
+reasoning. It uses frozen geometry features during alignment and supervised
+fine-tuning, then applies process-oriented reinforcement fine-tuning.
 
 ```text
-Stage 1: VGGT Geometry Alignment
-Stage 2: Geometry-Augmented Spatial SFT
-Stage 3: PSRO-RFT
+Stage 1: VGGT geometry alignment
+Stage 2: geometry-augmented spatial SFT
+Stage 3: GSPO/PSRO-style reinforcement fine-tuning
 ```
 
-The PSRO format is introduced only in RFT:
+Generated datasets, checkpoints, caches, logs, and evaluation artifacts are not
+stored in this repository.
+
+## Installation
+
+```bash
+python -m pip install -e .
+python -m pytest -q
+```
+
+## Quick Smoke
+
+```bash
+bash scripts/smoke_stage1.sh
+bash scripts/smoke_stage2.sh
+bash scripts/smoke_stage3.sh
+```
+
+## Configure Paths
+
+Set local paths before real training:
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+export PYTHON_BIN=python
+export MODEL_PATH=/path/to/Qwen3-VL-2B-Instruct
+export VGGT_MODEL=/path/to/VGGT-1B
+export VGGT_SOURCE=/path/to/vggt/source
+export VERL_ROOT=/path/to/verl
+```
+
+## Main Commands
+
+```bash
+bash scripts/run_vggt_cache.sh
+bash scripts/run_stage1_align.sh
+bash scripts/run_stage2_sft.sh
+bash scripts/run_stage3_rft.sh
+bash scripts/run_eval_dsr.sh outputs/stage3_psro_rft normal
+```
+
+The Stage 3 answer format is:
 
 ```text
 <think>
@@ -28,39 +64,7 @@ final answer only
 </answer>
 ```
 
-See `GeoPSRO_METHOD_TRAINING_DETAILS.md` for the method, prompt, loss, data,
-reward, and batch-size plan.
+## Notes
 
-## Quick Smoke
-
-```bash
-python -m pytest -q
-python -m geopsro4d.train.train_stage1_align --smoke --output outputs/smoke_stage1
-python -m geopsro4d.train.train_stage2_sft --smoke --output outputs/smoke_stage2
-python -m geopsro4d.train.train_stage3_rft --smoke --output outputs/smoke_stage3
-```
-
-## Server Defaults
-
-The scripts default to the shared server layout used by previous GeoThinker/GeoBridge work:
-
-```text
-/mnt/guojh/lq/new/conda/envs/geothinker
-/mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct
-/mnt/guojh/lq/new/weights/base_models/VGGT-1B
-/mnt/guojh/lq/new/verl
-```
-
-Use `HF_ENDPOINT=https://hf-mirror.com` for Hugging Face downloads.
-
-## Main Commands
-
-```bash
-bash scripts/run_vggt_cache.sh
-bash scripts/run_stage1_align.sh
-bash scripts/run_stage2_sft.sh
-bash scripts/run_stage3_rft.sh
-bash scripts/run_eval_dsr.sh outputs/stage3_psro_rft normal
-```
-
-Generated data, cache, checkpoints, and result artifacts are intentionally ignored by Git.
+- Keep benchmark annotations and media outside Git.
+- Pass machine-specific paths through environment variables or config files.

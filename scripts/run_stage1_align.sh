@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN="${PYTHON_BIN:-/mnt/guojh/lq/new/conda/envs/geobridge-verl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
 TORCHRUN_BIN="${TORCHRUN_BIN:-$(dirname "${PYTHON_BIN}")/torchrun}"
 OUTPUT="${OUTPUT:-outputs/stage1_vggt_align}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
@@ -9,8 +9,8 @@ NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
 export PYTHONPATH="${PYTHONPATH:-$PWD}"
 
 args=(
-  --model-path "${MODEL_PATH:-/mnt/guojh/lq/new/models/Qwen/Qwen3-VL-2B-Instruct}"
-  --train-jsonl "${TRAIN_JSONL:-/mnt/guojh/lq/new/datasets/manifests/geowire_formal_f8/spar.jsonl}"
+  --model-path "${MODEL_PATH:-models/Qwen3-VL-2B-Instruct}"
+  --train-jsonl "${TRAIN_JSONL:-data/manifests/spatialfit_formal_f8/spar.jsonl}"
   --cache-root "${CACHE_ROOT:-cache/vggt/spar}"
   --output "${OUTPUT}"
   --steps "${STEPS:-1000}"

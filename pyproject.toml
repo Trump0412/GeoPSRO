@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "geopsro4d"
+name = "gap4d"
 version = "0.1.0"
-description = "GeoPSRO-4D: VGGT-augmented PSRO-RFT pipeline for 4D spatial reasoning"
+description = "gap-4D: geometry-augmented post-training pipeline for 4D spatial reasoning"
 requires-python = ">=3.10"
 dependencies = [
   "torch",
